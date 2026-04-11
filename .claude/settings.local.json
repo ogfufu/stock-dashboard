@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s http://127.0.0.1:5000/)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(curl -s http://127.0.0.1:5000/api/stocks)",
+      "Bash(python -c ':*)"
+    ]
+  }
+}
