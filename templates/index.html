@@ -228,6 +228,35 @@
     .panel-empty   { color: var(--muted); font-size: 12px; text-align: center; padding: 20px 0; }
 
 
+    /* ── History bar ── */
+    .histbar {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 6px 18px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+      flex-wrap: wrap;
+    }
+    .histbar .h-label { color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase; white-space: nowrap; }
+    .hist-btn {
+      padding: 4px 12px;
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+      cursor: pointer;
+      transition: all .15s;
+      white-space: nowrap;
+    }
+    .hist-btn:hover  { border-color: var(--accent); color: var(--text); }
+    .hist-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+    .hist-btn.today  { border-color: var(--green); color: var(--green); }
+    .hist-btn.today.active { background: var(--green); border-color: var(--green); color: #fff; }
+    .hist-viewing { font-size: 12px; color: var(--new); font-weight: 600; margin-left: 6px; }
+
     /* ── Industry tooltip ── */
     .flow-item { position: relative; cursor: default; }
     .ind-tooltip {
@@ -255,6 +284,112 @@
       text-align: center; padding: 10px; color: var(--muted);
       font-size: 11px; border-top: 1px solid var(--border); flex-shrink: 0;
     }
+
+    /* ── Tab nav ── */
+    .tabbar {
+      background: var(--surface);
+      border-bottom: 2px solid var(--border);
+      padding: 0 18px;
+      display: flex;
+      gap: 2px;
+      flex-shrink: 0;
+    }
+    .tab-btn {
+      padding: 10px 20px;
+      background: none;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-bottom: -2px;
+      transition: color .15s, border-color .15s;
+    }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    .tab-pane { display: none; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
+    .tab-pane.active { display: flex; }
+
+    /* ── Sectors tab ── */
+    .sectors-toolbar {
+      background: var(--header-bg);
+      border-bottom: 1px solid var(--border);
+      padding: 8px 18px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+    .sectors-hint { font-size: 12px; color: var(--muted); }
+    .btn-add-sector { background: #238636; color: #fff; }
+
+    .sectors-grid {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 18px 24px;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+      gap: 16px;
+      align-content: start;
+    }
+
+    .sector-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+    }
+    .sector-card-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .sector-name-input {
+      flex: 1;
+      font-size: 14px;
+      font-weight: 700;
+      background: transparent;
+      border: none;
+      border-bottom: 1px solid var(--border);
+      color: var(--text);
+      padding: 3px 0;
+      outline: none;
+    }
+    .sector-name-input:focus { border-bottom-color: var(--accent); }
+    .btn-del-sector {
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-size: 15px;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 4px;
+      line-height: 1;
+    }
+    .btn-del-sector:hover { background: rgba(248,81,73,.15); color: var(--red); }
+
+    .sector-codes {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+    .sector-code-input {
+      flex: 1;
+      min-width: 0;
+      text-align: center;
+      font-size: 12px;
+      padding: 4px 3px;
+    }
+
+    .sector-chart {
+      overflow-x: auto;
+      display: flex;
+      align-items: flex-start;
+      justify-content: flex-start;
+    }
   </style>
 </head>
 <body>
@@ -267,22 +402,24 @@
   <div class="meta">最後更新：<span id="last-updated">—</span></div>
 </div>
 
+<!-- Tab nav -->
+<div class="tabbar">
+  <button class="tab-btn active" data-tab="ranking">排行榜</button>
+  <button class="tab-btn" data-tab="sectors">類股K棒</button>
+</div>
+
+<div id="tab-ranking" class="tab-pane active">
 <!-- Control bar -->
 <div class="ctrlbar">
   <label>刷新間隔</label>
   <select id="interval-select">
     <option value="60">1 分鐘</option>
-    <option value="120">2 分鐘</option>
     <option value="300" selected>5 分鐘</option>
-    <option value="600">10 分鐘</option>
   </select>
   <button class="btn btn-pause" id="btn-toggle">⏸ 暫停</button>
   <button class="btn btn-refresh" id="btn-now">↻ 立即刷新</button>
   <div class="countdown">下次刷新：<span id="countdown-val">—</span> 秒</div>
   <div class="spacer"></div>
-  <label>產業篩選</label>
-  <select id="filter-industry"><option value="">全部</option></select>
-  <input type="text" id="search-input" placeholder="搜尋代號 / 名稱" />
   <div class="row-count">顯示 <span id="row-count">0</span> 筆</div>
 </div>
 
@@ -352,6 +489,24 @@
 </div>
 
 
+<!-- History bar -->
+<div class="histbar">
+  <span class="h-label">歷史資料</span>
+  <div id="hist-btns" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+  <span class="hist-viewing" id="hist-viewing"></span>
+</div>
+
+</div><!-- /tab-ranking -->
+
+<!-- Sectors tab -->
+<div id="tab-sectors" class="tab-pane">
+  <div class="sectors-toolbar">
+    <button class="btn btn-add-sector" id="btn-add-sector">+ 新增類股</button>
+    <span class="sectors-hint">資料來源：即時排行榜（需先載入資料）</span>
+  </div>
+  <div class="sectors-grid" id="sectors-grid"></div>
+</div>
+
 <!-- Industry tooltip -->
 <div class="ind-tooltip" id="ind-tooltip">
   <div class="tt-title" id="tt-title">—</div>
@@ -383,8 +538,6 @@
   const btnToggle   = document.getElementById('btn-toggle');
   const btnNow      = document.getElementById('btn-now');
   const intervalSel = document.getElementById('interval-select');
-  const filterInd   = document.getElementById('filter-industry');
-  const searchInput = document.getElementById('search-input');
 
   const fChangeEn  = document.getElementById('f-change-en');
   const fChangeVal = document.getElementById('f-change-val');
@@ -428,11 +581,12 @@
       allData = json.data;
       lastUpdated.textContent = json.updated_at;
 
-      populateIndustryFilter();
       renderTable();
       renderIndustryPanel();
+      renderAllSectorCharts();
       setStatus('');
       prevRanks = newRanks;
+      loadHistoryDates();
     } catch (e) {
       setStatus('error', '❌ 抓取失敗：' + e.message);
     }
@@ -445,18 +599,6 @@
     statusBar.textContent = msg;
   }
 
-  // ── Industry dropdown ──
-  function populateIndustryFilter() {
-    const saved = filterInd.value;
-    const inds = [...new Set(allData.map(r => r['產業類型']).filter(Boolean))].sort();
-    filterInd.innerHTML = '<option value="">全部</option>';
-    inds.forEach(ind => {
-      const o = document.createElement('option');
-      o.value = o.textContent = ind;
-      filterInd.appendChild(o);
-    });
-    filterInd.value = saved;
-  }
 
   // ── Rank badge ──
   function rankBadge(code, cur) {
@@ -490,15 +632,7 @@
 
   // ── Render table ──
   function renderTable() {
-    const industry = filterInd.value;
-    const keyword  = searchInput.value.trim().toLowerCase();
-
-    let rows = allData.filter(r => {
-      if (industry && r['產業類型'] !== industry) return false;
-      if (keyword  && !r['代號'].toLowerCase().includes(keyword)
-                   && !(r['名稱'] || '').toLowerCase().includes(keyword)) return false;
-      return true;
-    });
+    let rows = allData.slice();
     rows = applyCondFilters(rows);
 
     if (sortCol) {
@@ -656,8 +790,6 @@
     fetchStocks();
   });
   intervalSel.addEventListener('change', () => { countdown = +intervalSel.value; countdownEl.textContent = countdown; });
-  filterInd.addEventListener('change', renderTable);
-  searchInput.addEventListener('input', renderTable);
 
   [fChangeEn, fItufEn, fYoyEn, fYoy1En].forEach((cb, i) => {
     const ids = ['fl-change','fl-ituf','fl-yoy','fl-yoy1'];
@@ -704,9 +836,236 @@
 
   function hideIndTooltip() { ttEl.classList.remove('visible'); }
 
+  // ── History ──
+  const histBtns    = document.getElementById('hist-btns');
+  const histViewing = document.getElementById('hist-viewing');
+  let currentDate   = null;   // null = live
+
+  async function loadHistoryDates() {
+    try {
+      const res  = await fetch('/api/history');
+      const json = await res.json();
+      renderHistBtns(json.dates || []);
+    } catch (e) { /* silent */ }
+  }
+
+  function renderHistBtns(dates) {
+    histBtns.innerHTML = '';
+
+    // Today button
+    const todayBtn = document.createElement('button');
+    todayBtn.className = 'hist-btn today active';
+    todayBtn.textContent = '今日（即時）';
+    todayBtn.addEventListener('click', () => switchToLive(todayBtn));
+    histBtns.appendChild(todayBtn);
+
+    // Past dates (skip today)
+    const today = new Date().toISOString().slice(0, 10);
+    dates.filter(d => d !== today).forEach(date => {
+      const btn = document.createElement('button');
+      btn.className = 'hist-btn';
+      btn.textContent = date;
+      btn.dataset.date = date;
+      btn.addEventListener('click', () => switchToHistory(date, btn));
+      histBtns.appendChild(btn);
+    });
+  }
+
+  function switchToLive(activeBtn) {
+    currentDate = null;
+    histViewing.textContent = '';
+    document.querySelectorAll('.hist-btn').forEach(b => b.classList.remove('active'));
+    activeBtn.classList.add('active');
+    isPaused = false;
+    btnToggle.textContent = '⏸ 暫停';
+    btnToggle.className   = 'btn btn-pause';
+    fetchStocks();
+  }
+
+  async function switchToHistory(date, activeBtn) {
+    currentDate = date;
+    histViewing.textContent = `📅 查看 ${date} 歷史資料`;
+    document.querySelectorAll('.hist-btn').forEach(b => b.classList.remove('active'));
+    activeBtn.classList.add('active');
+
+    // Pause live refresh
+    isPaused = true;
+    btnToggle.textContent = '▶ 繼續';
+    btnToggle.className   = 'btn btn-resume';
+
+    setStatus('loading', `載入 ${date} 歷史資料…`);
+    try {
+      const res  = await fetch(`/api/history?date=${date}`);
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error);
+      allData = json.data;
+      lastUpdated.textContent = date + ' 歷史快照';
+      renderTable();
+      renderIndustryPanel();
+      setStatus('');
+    } catch (e) {
+      setStatus('error', '❌ 載入失敗：' + e.message);
+    }
+  }
+
+  // ── Tab switching ──
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tab = btn.dataset.tab;
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('tab-' + tab).classList.add('active');
+      if (tab === 'sectors') renderAllSectorCharts();
+    });
+  });
+
+  // ── Sector K-bar tab ──
+  let sectors = JSON.parse(localStorage.getItem('rack_sectors') || 'null') || [
+    { name: '類股一', stocks: ['', '', '', '', ''] },
+    { name: '類股二', stocks: ['', '', '', '', ''] },
+  ];
+
+  function saveSectors() {
+    localStorage.setItem('rack_sectors', JSON.stringify(sectors));
+  }
+
+  function sectorKBarSVG(stocksInfo) {
+    // Always render 5 fixed columns; stocksInfo has exactly 5 items
+    const chartH = 140, colW = 52, padL = 28, padB = 22;
+    const n = 5;
+    const svgW   = padL + n * colW;
+    const svgH   = chartH + padB;
+    const yScale = pct => chartH * (10 - Math.max(-10, Math.min(10, pct))) / 20;
+    const parts  = [];
+
+    // Background
+    parts.push(`<rect x="${padL}" y="0" width="${n * colW}" height="${chartH}" fill="#0d1117"/>`);
+
+    // Grid lines
+    [-10, -5, 0, 5, 10].forEach(pct => {
+      const y = yScale(pct).toFixed(1);
+      const isZero = pct === 0;
+      parts.push(`<line x1="${padL}" y1="${y}" x2="${svgW}" y2="${y}" stroke="${isZero ? '#555' : '#1e242c'}" stroke-width="${isZero ? 1.5 : 1}"/>`);
+      parts.push(`<text x="${padL - 3}" y="${(+y + 3.5).toFixed(1)}" text-anchor="end" font-size="9" fill="#555">${pct}</text>`);
+    });
+
+    for (let i = 0; i < n; i++) {
+      const cx = padL + i * colW + colW / 2;
+      const s  = stocksInfo[i];
+
+      if (!s || !s.code) continue; // empty slot — no label
+
+      const label = (s.name || s.code).slice(0, 3);
+      parts.push(`<text x="${cx}" y="${svgH - 4}" text-anchor="middle" font-size="10" fill="#8b949e">${label}</text>`);
+
+      if (!s.data) {
+        parts.push(`<text x="${cx}" y="${(chartH / 2 + 4).toFixed(1)}" text-anchor="middle" font-size="9" fill="#444">N/A</text>`);
+        continue;
+      }
+
+      const d = s.data;
+      const open = d['開盤'], high = d['最高'], low = d['最低'], close = d['股價'], chg = d['漲跌幅'];
+      if (!open || !high || !low || !close || chg == null) continue;
+
+      const prev    = close / (1 + chg / 100);
+      const openPct = (open - prev) / prev * 100;
+      const highPct = (high - prev) / prev * 100;
+      const lowPct  = (low  - prev) / prev * 100;
+
+      const yO = yScale(openPct), yC = yScale(chg);
+      const yH = yScale(highPct), yL = yScale(lowPct);
+      const bTop = Math.min(yO, yC), bBot = Math.max(yO, yC);
+      const bH   = Math.max(bBot - bTop, 2);
+      const bw   = 9; // thin body like a real candlestick
+      const isUp = chg >= openPct;
+      const color = isUp ? '#f85149' : '#3fb950';
+
+      // Upper shadow (high → box top)
+      parts.push(`<line x1="${cx}" y1="${yH.toFixed(1)}" x2="${cx}" y2="${bTop.toFixed(1)}" stroke="${color}" stroke-width="1.5"/>`);
+      // Body
+      parts.push(`<rect x="${(cx - bw/2).toFixed(1)}" y="${bTop.toFixed(1)}" width="${bw}" height="${bH.toFixed(1)}" fill="${color}" rx="1"/>`);
+      // Lower shadow (box bottom → low)
+      parts.push(`<line x1="${cx}" y1="${bBot.toFixed(1)}" x2="${cx}" y2="${yL.toFixed(1)}" stroke="${color}" stroke-width="1.5"/>`);
+    }
+
+    return `<svg width="${svgW}" height="${svgH}" xmlns="http://www.w3.org/2000/svg">${parts.join('')}</svg>`;
+  }
+
+  function buildStocksInfo(codeList) {
+    // Always return exactly 5 items
+    return Array.from({ length: 5 }, (_, i) => {
+      const c = (codeList[i] || '').trim();
+      if (!c) return { code: '', name: '', data: null };
+      const data = allData.find(r => r['代號'] === c) || null;
+      return { code: c, name: data ? data['名稱'] : '', data };
+    });
+  }
+
+  function renderSectorChart(cardEl, codeList) {
+    cardEl.querySelector('.sector-chart').innerHTML = sectorKBarSVG(buildStocksInfo(codeList));
+  }
+
+  function renderAllSectorCharts() {
+    document.querySelectorAll('.sector-card').forEach(card => {
+      const codes = [...card.querySelectorAll('.sector-code-input')].map(i => i.value);
+      renderSectorChart(card, codes);
+    });
+  }
+
+  function createSectorCard(sector, idx) {
+    const card = document.createElement('div');
+    card.className = 'sector-card';
+    card.dataset.idx = idx;
+    card.innerHTML = `
+      <div class="sector-card-header">
+        <input class="sector-name-input" placeholder="類股名稱" value="${(sector.name||'').replace(/"/g,'&quot;')}">
+        <button class="btn-del-sector" title="刪除">✕</button>
+      </div>
+      <div class="sector-codes">
+        ${sector.stocks.map((c,si)=>`<input class="sector-code-input" placeholder="代號${si+1}" value="${(c||'').replace(/"/g,'&quot;')}" maxlength="6">`).join('')}
+      </div>
+      <div class="sector-chart"></div>`;
+
+    card.querySelector('.sector-name-input').addEventListener('input', e => {
+      sectors[idx].name = e.target.value;
+      saveSectors();
+    });
+    card.querySelectorAll('.sector-code-input').forEach((inp, si) => {
+      inp.addEventListener('input', () => {
+        sectors[idx].stocks[si] = inp.value.trim();
+        saveSectors();
+        renderSectorChart(card, sectors[idx].stocks);
+      });
+    });
+    card.querySelector('.btn-del-sector').addEventListener('click', () => {
+      sectors.splice(idx, 1);
+      saveSectors();
+      renderSectorsGrid();
+    });
+
+    renderSectorChart(card, sector.stocks);
+    return card;
+  }
+
+  function renderSectorsGrid() {
+    const grid = document.getElementById('sectors-grid');
+    grid.innerHTML = '';
+    sectors.forEach((s, i) => grid.appendChild(createSectorCard(s, i)));
+  }
+
+  document.getElementById('btn-add-sector').addEventListener('click', () => {
+    sectors.push({ name: '', stocks: ['', '', '', '', ''] });
+    saveSectors();
+    renderSectorsGrid();
+  });
+
+  renderSectorsGrid();
+
   // ── Init ──
   fetchStocks();
   startTicker();
+  loadHistoryDates();
 </script>
 </body>
 </html>

@@ -1,11 +1,12 @@
 import os
 import io
+import sqlite3
 import threading
 from datetime import datetime
 
 import pandas as pd
 import requests
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request
 
 app = Flask(__name__)
 
@@ -16,6 +17,108 @@ HEADERS = {
         'Chrome/91.0.4472.124 Safari/537.36'
     )
 }
+
+DB_PATH = os.path.join(os.path.dirname(__file__), 'history.db')
+KEEP_DAYS = 5
+
+# ---------- SQLite history ----------
+
+def init_db():
+    con = sqlite3.connect(DB_PATH)
+    con.execute('''
+        CREATE TABLE IF NOT EXISTS snapshots (
+            date       TEXT NOT NULL,
+            rank       INTEGER,
+            code       TEXT,
+            name       TEXT,
+            price      REAL,
+            change_pct REAL,
+            trust      INTEGER,
+            yoy        REAL,
+            yoy1       REAL,
+            open       REAL,
+            high       REAL,
+            low        REAL,
+            capital    REAL,
+            industry   TEXT,
+            PRIMARY KEY (date, code)
+        )
+    ''')
+    con.commit()
+    con.close()
+
+
+def save_snapshot(df, date_str):
+    """Save today's data; skip if already saved for this date."""
+    con = sqlite3.connect(DB_PATH)
+    exists = con.execute(
+        'SELECT 1 FROM snapshots WHERE date=? LIMIT 1', (date_str,)
+    ).fetchone()
+    if exists:
+        con.close()
+        return
+
+    rows = [
+        (
+            date_str,
+            int(r['排序']),
+            str(r['代號']),
+            r['名稱'],
+            r['股價'],
+            r['漲跌幅'],
+            int(r['投信']) if r['投信'] is not None else None,
+            r['月(YOY)'],
+            r['月-1(YOY)'],
+            r['開盤'],
+            r['最高'],
+            r['最低'],
+            r['資金(億)'],
+            r['產業類型'],
+        )
+        for _, r in df.iterrows()
+    ]
+    con.executemany(
+        'INSERT OR REPLACE INTO snapshots VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        rows
+    )
+
+    # Keep only last KEEP_DAYS dates
+    dates = [
+        d[0] for d in con.execute(
+            'SELECT DISTINCT date FROM snapshots ORDER BY date DESC'
+        ).fetchall()
+    ]
+    if len(dates) > KEEP_DAYS:
+        for old in dates[KEEP_DAYS:]:
+            con.execute('DELETE FROM snapshots WHERE date=?', (old,))
+
+    con.commit()
+    con.close()
+
+
+def get_history_dates():
+    con = sqlite3.connect(DB_PATH)
+    dates = [
+        d[0] for d in con.execute(
+            'SELECT DISTINCT date FROM snapshots ORDER BY date DESC'
+        ).fetchall()
+    ]
+    con.close()
+    return dates
+
+
+def get_snapshot(date_str):
+    con = sqlite3.connect(DB_PATH)
+    rows = con.execute(
+        '''SELECT rank,code,name,price,change_pct,trust,yoy,yoy1,
+                  open,high,low,capital,industry
+           FROM snapshots WHERE date=? ORDER BY rank''',
+        (date_str,)
+    ).fetchall()
+    con.close()
+    cols = ['排序','代號','名稱','股價','漲跌幅','投信','月(YOY)','月-1(YOY)','開盤','最高','最低','資金(億)','產業類型']
+    return [dict(zip(cols, r)) for r in rows]
+
 
 # ---------- In-memory cache (Wespai changes once a day) ----------
 _wespai_cache = {'data': None, 'date': None}
@@ -66,7 +169,6 @@ def run_stock_update():
         '成交值(億)': '資金(億)',
     })
 
-    # 漲跌幅 (%) — strip +/% signs then parse
     processed['漲跌幅'] = pd.to_numeric(
         processed['漲跌幅'].astype(str)
             .str.replace('+', '', regex=False)
@@ -75,7 +177,6 @@ def run_stock_update():
         errors='coerce'
     ).fillna(0)
 
-    # 投信 as integer (no decimal)
     processed['投信'] = pd.to_numeric(
         processed['投信'], errors='coerce'
     ).fillna(0).round().astype(int)
@@ -84,7 +185,6 @@ def run_stock_update():
     for col in numeric_cols:
         processed[col] = pd.to_numeric(processed[col], errors='coerce')
 
-    # Sort by 資金(億) descending, keep top 100
     processed = (
         processed
         .sort_values('資金(億)', ascending=False)
@@ -108,16 +208,36 @@ def index():
 def api_stocks():
     try:
         df = run_stock_update()
+        today = datetime.now().strftime('%Y-%m-%d')
+        save_snapshot(df, today)
+
         records = df.where(pd.notnull(df), None).to_dict(orient='records')
         return jsonify({
             'success': True,
             'data': records,
             'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'count': len(records),
+            'date': today,
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
+
+@app.route('/api/history')
+def api_history():
+    """Return available dates, or snapshot for a specific date."""
+    date = request.args.get('date')
+    if date:
+        records = get_snapshot(date)
+        if not records:
+            return jsonify({'success': False, 'error': '查無此日期資料'}), 404
+        return jsonify({'success': True, 'data': records, 'date': date, 'count': len(records)})
+    else:
+        dates = get_history_dates()
+        return jsonify({'success': True, 'dates': dates})
+
+
+init_db()
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
