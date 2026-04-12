@@ -429,6 +429,28 @@
       align-items: flex-start;
       justify-content: flex-start;
     }
+
+    /* Drag handle */
+    .drag-handle {
+      cursor: grab;
+      color: var(--muted);
+      font-size: 15px;
+      padding: 0 4px 0 0;
+      user-select: none;
+      flex-shrink: 0;
+      line-height: 1;
+      touch-action: none;
+    }
+    .drag-handle:active { cursor: grabbing; }
+    .sector-card.dragging  { opacity: 0.4; }
+    .sector-card.drag-over { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+
+    /* Watchlist card: codes wrap */
+    .watch-codes { flex-wrap: wrap !important; }
+    .watch-codes .sector-code-input { flex: none; width: 64px; }
+
+    /* 觀察 / watch button */
+    .btn-watch { background: #1f6feb; color: #fff; }
   </style>
 </head>
 <body>
@@ -459,6 +481,7 @@
   <button class="btn btn-refresh" id="btn-now">↻ 立即刷新</button>
   <div class="countdown">下次刷新：<span id="countdown-val">—</span> 秒</div>
   <div class="spacer"></div>
+  <button class="btn btn-watch"  id="btn-watch"  title="將篩選結果加入類股K棒觀察">👁 列入觀察</button>
   <button class="btn btn-backup" id="btn-backup" title="將當前資料備份為前一交易日歷史">💾 備份到歷史</button>
   <div class="row-count">顯示 <span id="row-count">0</span> 筆</div>
 </div>
@@ -1106,19 +1129,16 @@
     localStorage.setItem('rack_sectors', JSON.stringify(sectors));
   }
 
-  function sectorKBarSVG(stocksInfo) {
-    // Always render 5 fixed columns; stocksInfo has exactly 5 items
+  // Variable-N K-bar SVG (works for both fixed-5 and watchlist cards)
+  function sectorKBarSVGN(stocksInfo) {
+    const n = Math.max(1, stocksInfo.length);
     const chartH = 140, colW = 52, padL = 28, padB = 22;
-    const n = 5;
     const svgW   = padL + n * colW;
     const svgH   = chartH + padB;
     const yScale = pct => chartH * (10 - Math.max(-10, Math.min(10, pct))) / 20;
     const parts  = [];
 
-    // Background
     parts.push(`<rect x="${padL}" y="0" width="${n * colW}" height="${chartH}" fill="#0d1117"/>`);
-
-    // Grid lines
     [-10, -5, 0, 5, 10].forEach(pct => {
       const y = yScale(pct).toFixed(1);
       const isZero = pct === 0;
@@ -1129,8 +1149,7 @@
     for (let i = 0; i < n; i++) {
       const cx = padL + i * colW + colW / 2;
       const s  = stocksInfo[i];
-
-      if (!s || !s.code) continue; // empty slot — no label
+      if (!s || !s.code) continue;
 
       const label = (s.name || s.code).slice(0, 3);
       parts.push(`<text x="${cx}" y="${svgH - 4}" text-anchor="middle" font-size="10" fill="#8b949e">${label}</text>`);
@@ -1139,7 +1158,6 @@
         parts.push(`<text x="${cx}" y="${(chartH / 2 + 4).toFixed(1)}" text-anchor="middle" font-size="9" fill="#444">N/A</text>`);
         continue;
       }
-
       const d = s.data;
       const open = d['開盤'], high = d['最高'], low = d['最低'], close = d['股價'], chg = d['漲跌幅'];
       if (!open || !high || !low || !close || chg == null) continue;
@@ -1153,23 +1171,19 @@
       const yH = yScale(highPct), yL = yScale(lowPct);
       const bTop = Math.min(yO, yC), bBot = Math.max(yO, yC);
       const bH   = Math.max(bBot - bTop, 2);
-      const bw   = 9; // thin body like a real candlestick
+      const bw   = 9;
       const isUp = chg >= openPct;
       const color = isUp ? '#f85149' : '#3fb950';
 
-      // Upper shadow (high → box top)
       parts.push(`<line x1="${cx}" y1="${yH.toFixed(1)}" x2="${cx}" y2="${bTop.toFixed(1)}" stroke="${color}" stroke-width="1.5"/>`);
-      // Body
       parts.push(`<rect x="${(cx - bw/2).toFixed(1)}" y="${bTop.toFixed(1)}" width="${bw}" height="${bH.toFixed(1)}" fill="${color}" rx="1"/>`);
-      // Lower shadow (box bottom → low)
       parts.push(`<line x1="${cx}" y1="${bBot.toFixed(1)}" x2="${cx}" y2="${yL.toFixed(1)}" stroke="${color}" stroke-width="1.5"/>`);
     }
-
     return `<svg width="${svgW}" height="${svgH}" xmlns="http://www.w3.org/2000/svg">${parts.join('')}</svg>`;
   }
 
+  // Regular card: always 5 slots (pads empty)
   function buildStocksInfo(codeList) {
-    // Always return exactly 5 items
     return Array.from({ length: 5 }, (_, i) => {
       const c = (codeList[i] || '').trim();
       if (!c) return { code: '', name: '', data: null };
@@ -1178,28 +1192,143 @@
     });
   }
 
-  function renderSectorChart(cardEl, codeList) {
-    cardEl.querySelector('.sector-chart').innerHTML = sectorKBarSVG(buildStocksInfo(codeList));
+  // Watchlist card: only filled codes
+  function buildWatchStocksInfo(codeList) {
+    return codeList.filter(c => c?.trim()).map(c => {
+      const code = c.trim();
+      const data = allData.find(r => r['代號'] === code) || null;
+      return { code, name: data ? data['名稱'] : '', data };
+    });
+  }
+
+  function renderSectorCard(cardEl) {
+    const isWatch = cardEl.classList.contains('watchlist-card');
+    const codes   = [...cardEl.querySelectorAll('.sector-code-input')].map(i => i.value.trim());
+    const info    = isWatch ? buildWatchStocksInfo(codes) : buildStocksInfo(codes);
+    cardEl.querySelector('.sector-chart').innerHTML = info.length ? sectorKBarSVGN(info) : '';
   }
 
   function renderAllSectorCharts() {
-    document.querySelectorAll('.sector-card').forEach(card => {
-      const codes = [...card.querySelectorAll('.sector-code-input')].map(i => i.value);
-      renderSectorChart(card, codes);
+    document.querySelectorAll('.sector-card').forEach(card => renderSectorCard(card));
+  }
+
+  // ── Drag-to-reorder ──
+  let touchDragState = null;
+
+  function reorderSectors(fromIdx, toIdx) {
+    if (fromIdx === toIdx || fromIdx < 0 || toIdx < 0 ||
+        fromIdx >= sectors.length || toIdx >= sectors.length) return;
+    const [moved] = sectors.splice(fromIdx, 1);
+    sectors.splice(toIdx > fromIdx ? toIdx - 1 : toIdx, 0, moved);
+    saveSectors();
+    renderSectorsGrid();
+  }
+
+  function addDragToCard(card, idx) {
+    const handle = card.querySelector('.drag-handle');
+    if (!handle) return;
+
+    // Desktop: set draggable only when handle is held
+    handle.addEventListener('mousedown', () => { card.draggable = true; });
+    card.addEventListener('dragstart', e => {
+      e.dataTransfer.setData('text/plain', String(idx));
+      setTimeout(() => card.classList.add('dragging'), 0);
+    });
+    card.addEventListener('dragend', () => {
+      card.draggable = false;
+      card.classList.remove('dragging');
+      document.querySelectorAll('.sector-card').forEach(c => c.classList.remove('drag-over'));
+    });
+    card.addEventListener('dragover', e => {
+      e.preventDefault();
+      document.querySelectorAll('.sector-card').forEach(c => c.classList.remove('drag-over'));
+      card.classList.add('drag-over');
+    });
+    card.addEventListener('drop', e => {
+      e.preventDefault();
+      card.classList.remove('drag-over');
+      const from = parseInt(e.dataTransfer.getData('text/plain'));
+      const to   = parseInt(card.dataset.idx);
+      reorderSectors(from, to);
+    });
+
+    // Mobile: long-press on handle to drag
+    handle.addEventListener('touchstart', e => {
+      const touch = e.touches[0];
+      const origRect = card.getBoundingClientRect();
+      touchDragState = {
+        card, idx,
+        startX: touch.clientX, startY: touch.clientY,
+        origRect, ghost: null, overCard: null,
+        timer: setTimeout(() => {
+          if (!touchDragState || touchDragState.card !== card) return;
+          const ghost = card.cloneNode(true);
+          Object.assign(ghost.style, {
+            position: 'fixed', opacity: '0.85', pointerEvents: 'none',
+            zIndex: '9999', width: origRect.width + 'px',
+            top: origRect.top + 'px', left: origRect.left + 'px'
+          });
+          document.body.appendChild(ghost);
+          touchDragState.ghost = ghost;
+          card.classList.add('dragging');
+        }, 380)
+      };
+    }, { passive: true });
+
+    handle.addEventListener('touchmove', e => {
+      if (!touchDragState?.ghost) return;
+      e.preventDefault();
+      const touch = e.touches[0];
+      const dx = touch.clientX - touchDragState.startX;
+      const dy = touch.clientY - touchDragState.startY;
+      touchDragState.ghost.style.left = (touchDragState.origRect.left + dx) + 'px';
+      touchDragState.ghost.style.top  = (touchDragState.origRect.top  + dy) + 'px';
+      touchDragState.ghost.style.display = 'none';
+      const el = document.elementFromPoint(touch.clientX, touch.clientY);
+      touchDragState.ghost.style.display = '';
+      const over = el?.closest('.sector-card');
+      document.querySelectorAll('.sector-card').forEach(c => c.classList.remove('drag-over'));
+      if (over && over !== card) { over.classList.add('drag-over'); touchDragState.overCard = over; }
+      else touchDragState.overCard = null;
+    }, { passive: false });
+
+    handle.addEventListener('touchend', () => {
+      if (!touchDragState) return;
+      clearTimeout(touchDragState.timer);
+      if (touchDragState.ghost) {
+        touchDragState.ghost.remove();
+        card.classList.remove('dragging');
+        document.querySelectorAll('.sector-card').forEach(c => c.classList.remove('drag-over'));
+        if (touchDragState.overCard) {
+          reorderSectors(idx, parseInt(touchDragState.overCard.dataset.idx));
+        }
+      }
+      touchDragState = null;
     });
   }
 
   function createSectorCard(sector, idx) {
+    const isWatch = !!sector.isWatchlist;
     const card = document.createElement('div');
-    card.className = 'sector-card';
+    card.className = 'sector-card' + (isWatch ? ' watchlist-card' : '');
     card.dataset.idx = idx;
+
+    const codesHTML = isWatch
+      ? (sector.stocks || []).map(c =>
+          `<input class="sector-code-input" placeholder="代號" value="${(c||'').replace(/"/g,'&quot;')}" maxlength="6">`)
+          .join('')
+      : (sector.stocks || ['','','','','']).map((c, si) =>
+          `<input class="sector-code-input" placeholder="代號${si+1}" value="${(c||'').replace(/"/g,'&quot;')}" maxlength="6">`)
+          .join('');
+
     card.innerHTML = `
       <div class="sector-card-header">
-        <input class="sector-name-input" placeholder="類股名稱" value="${(sector.name||'').replace(/"/g,'&quot;')}">
+        <span class="drag-handle" title="拖曳排序">⠿</span>
+        <input class="sector-name-input" placeholder="${isWatch ? '觀察清單' : '類股名稱'}" value="${(sector.name||'').replace(/"/g,'&quot;')}">
         <button class="btn-del-sector" title="刪除">✕</button>
       </div>
-      <div class="sector-codes">
-        ${sector.stocks.map((c,si)=>`<input class="sector-code-input" placeholder="代號${si+1}" value="${(c||'').replace(/"/g,'&quot;')}" maxlength="6">`).join('')}
+      <div class="sector-codes${isWatch ? ' watch-codes' : ''}">
+        ${codesHTML}
       </div>
       <div class="sector-chart"></div>`;
 
@@ -1211,7 +1340,7 @@
       inp.addEventListener('input', () => {
         sectors[idx].stocks[si] = inp.value.trim();
         saveSectors();
-        renderSectorChart(card, sectors[idx].stocks);
+        renderSectorCard(card);
       });
     });
     card.querySelector('.btn-del-sector').addEventListener('click', () => {
@@ -1220,7 +1349,8 @@
       renderSectorsGrid();
     });
 
-    renderSectorChart(card, sector.stocks);
+    addDragToCard(card, idx);
+    renderSectorCard(card);
     return card;
   }
 
@@ -1233,6 +1363,25 @@
   document.getElementById('btn-add-sector').addEventListener('click', () => {
     sectors.push({ name: '', stocks: ['', '', '', '', ''] });
     saveSectors();
+    renderSectorsGrid();
+  });
+
+  // ── 列入觀察 button ──
+  document.getElementById('btn-watch').addEventListener('click', () => {
+    const codes = applyCondFilters(allData.slice()).map(r => r['代號']).filter(Boolean);
+    if (!codes.length) { alert('目前無篩選結果'); return; }
+    const wIdx = sectors.findIndex(s => s.isWatchlist);
+    if (wIdx >= 0) {
+      sectors[wIdx].stocks = codes;
+    } else {
+      sectors.unshift({ name: '觀察', stocks: codes, isWatchlist: true });
+    }
+    saveSectors();
+    // Switch to 類股K棒 tab
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+    document.querySelector('.tab-btn[data-tab="sectors"]').classList.add('active');
+    document.getElementById('tab-sectors').classList.add('active');
     renderSectorsGrid();
   });
 
