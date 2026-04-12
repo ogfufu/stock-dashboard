@@ -281,6 +281,8 @@
     .hist-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
     .hist-btn.today  { border-color: var(--green); color: var(--green); }
     .hist-btn.today.active { background: var(--green); border-color: var(--green); color: #fff; }
+    .hist-btn.backup-snap  { border-color: #6e40c9; color: #a371f7; }
+    .hist-btn.backup-snap.active { background: #6e40c9; border-color: #6e40c9; color: #fff; }
     .hist-viewing { font-size: 12px; color: var(--new); font-weight: 600; margin-left: 6px; }
 
     /* ── Industry tooltip ── */
@@ -633,7 +635,7 @@
       setStatus('');
       prevRanks = newRanks;
       loadHistoryDates();
-      loadLatestHistoryForCrown();
+      loadCrownRef();
     } catch (e) {
       setStatus('error', '❌ 抓取失敗：' + e.message);
     }
@@ -959,15 +961,11 @@
   function hideIndTooltip() { ttEl.classList.remove('visible'); }
 
   // ── Crown: load previous trading day codes ──
-  async function loadLatestHistoryForCrown() {
+  async function loadCrownRef() {
     try {
-      const res   = await fetch('/api/history');
-      const json  = await res.json();
-      const past  = (json.dates || []).filter(d => d !== currentTradingDate);
-      if (!past.length) { prevHistCodes = new Set(); renderTable(); return; }
-      const res2  = await fetch(`/api/history?date=${past[0]}`);
-      const json2 = await res2.json();
-      prevHistCodes = new Set((json2.data || []).map(r => String(r['代號'])));
+      const res  = await fetch('/api/crown-ref');
+      const json = await res.json();
+      prevHistCodes = new Set((json.codes || []).map(String));
       renderTable();
     } catch { prevHistCodes = new Set(); }
   }
@@ -981,9 +979,10 @@
       const res  = await fetch('/api/backup', { method: 'POST' });
       const json = await res.json();
       if (!json.success) throw new Error(json.error);
+      localStorage.setItem('rack_backup_date', json.date);
       btn.textContent = `✔ 已備份至 ${json.date}`;
       loadHistoryDates();
-      loadLatestHistoryForCrown();
+      loadCrownRef();
     } catch (e) {
       btn.textContent = '❌ 備份失敗';
       setTimeout(() => { btn.textContent = '💾 備份到歷史'; btn.disabled = false; }, 2500);
@@ -1015,8 +1014,19 @@
     todayBtn.addEventListener('click', () => switchToLive(todayBtn));
     histBtns.appendChild(todayBtn);
 
-    // Past dates (skip current trading day)
-    dates.filter(d => d !== currentTradingDate).forEach(date => {
+    // Backup snapshot button (from localStorage)
+    const backupDate = localStorage.getItem('rack_backup_date');
+    if (backupDate && dates.includes(backupDate)) {
+      const bBtn = document.createElement('button');
+      bBtn.className = 'hist-btn backup-snap';
+      bBtn.textContent = `📋 備份 ${backupDate}`;
+      bBtn.dataset.date = backupDate;
+      bBtn.addEventListener('click', () => switchToHistory(backupDate, bBtn));
+      histBtns.appendChild(bBtn);
+    }
+
+    // Past dates (skip current trading day and backup date to avoid duplicate)
+    dates.filter(d => d !== currentTradingDate && d !== backupDate).forEach(date => {
       const btn = document.createElement('button');
       btn.className = 'hist-btn';
       btn.textContent = date;

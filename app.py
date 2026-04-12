@@ -44,8 +44,34 @@ def init_db():
             PRIMARY KEY (date, code)
         )
     ''')
+    # Crown reference: independent of date, stores the "previous day" baseline
+    con.execute('''
+        CREATE TABLE IF NOT EXISTS crown_ref (
+            code  TEXT PRIMARY KEY,
+            name  TEXT,
+            rank  INTEGER
+        )
+    ''')
     con.commit()
     con.close()
+
+
+def save_crown_ref(df):
+    """Replace the crown reference with current data."""
+    con = sqlite3.connect(DB_PATH)
+    con.execute('DELETE FROM crown_ref')
+    rows = [(str(r['代號']), r['名稱'], int(r['排序'])) for _, r in df.iterrows()]
+    con.executemany('INSERT INTO crown_ref VALUES (?,?,?)', rows)
+    con.commit()
+    con.close()
+
+
+def get_crown_ref():
+    """Return set of codes saved as crown reference."""
+    con = sqlite3.connect(DB_PATH)
+    rows = con.execute('SELECT code FROM crown_ref').fetchall()
+    con.close()
+    return [r[0] for r in rows]
 
 
 def last_trading_day():
@@ -228,20 +254,27 @@ def index():
 
 @app.route('/api/backup', methods=['POST'])
 def api_backup():
-    """Save the last-fetched data as the most recent trading day's snapshot."""
+    """Save current data as crown reference baseline + date snapshot."""
     global _last_df
-    # Auto-fetch if data not yet loaded (e.g. server just woke up)
     if _last_df is None:
         try:
             _last_df = run_stock_update()
         except Exception as e:
             return jsonify({'success': False, 'error': f'資料抓取失敗：{str(e)}'}), 500
     try:
+        save_crown_ref(_last_df)                                    # crown baseline
         target_date = last_trading_day()
-        save_snapshot(_last_df, target_date, overwrite=True)
+        save_snapshot(_last_df, target_date, overwrite=True)        # date snapshot
         return jsonify({'success': True, 'date': target_date})
     except Exception as e:
         return jsonify({'success': False, 'error': f'儲存失敗：{str(e)}'}), 500
+
+
+@app.route('/api/crown-ref')
+def api_crown_ref():
+    """Return the set of codes stored as crown reference."""
+    codes = get_crown_ref()
+    return jsonify({'success': True, 'codes': codes})
 
 
 @app.route('/api/stocks')
