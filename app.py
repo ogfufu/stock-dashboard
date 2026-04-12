@@ -2,7 +2,7 @@ import os
 import io
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, date, timedelta
 
 import pandas as pd
 import requests
@@ -48,15 +48,36 @@ def init_db():
     con.close()
 
 
-def save_snapshot(df, date_str):
-    """Save today's data; skip if already saved for this date."""
+def last_trading_day():
+    """Most recent weekday on or before today (today itself if weekday)."""
+    d = date.today()
+    while d.weekday() >= 5:   # Sat=5, Sun=6
+        d -= timedelta(days=1)
+    return d.strftime('%Y-%m-%d')
+
+
+def prev_trading_day():
+    """The trading day immediately before last_trading_day()."""
+    d = date.today()
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    d -= timedelta(days=1)
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d.strftime('%Y-%m-%d')
+
+
+def save_snapshot(df, date_str, overwrite=False):
+    """Save snapshot for date_str.  If overwrite=False, skip when date exists."""
     con = sqlite3.connect(DB_PATH)
     exists = con.execute(
         'SELECT 1 FROM snapshots WHERE date=? LIMIT 1', (date_str,)
     ).fetchone()
-    if exists:
+    if exists and not overwrite:
         con.close()
         return
+    if exists and overwrite:
+        con.execute('DELETE FROM snapshots WHERE date=?', (date_str,))
 
     rows = [
         (
@@ -120,7 +141,8 @@ def get_snapshot(date_str):
     return [dict(zip(cols, r)) for r in rows]
 
 
-# ---------- In-memory cache (Wespai changes once a day) ----------
+# ---------- In-memory cache ----------
+_last_df = None          # last successfully fetched DataFrame (for backup)
 _wespai_cache = {'data': None, 'date': None}
 _wespai_lock = threading.Lock()
 
@@ -204,12 +226,32 @@ def index():
     return render_template('index.html')
 
 
+@app.route('/api/backup', methods=['POST'])
+def api_backup():
+    """Save the last-fetched data as the most recent trading day's snapshot."""
+    global _last_df
+    # Auto-fetch if data not yet loaded (e.g. server just woke up)
+    if _last_df is None:
+        try:
+            _last_df = run_stock_update()
+        except Exception as e:
+            return jsonify({'success': False, 'error': f'資料抓取失敗：{str(e)}'}), 500
+    try:
+        target_date = last_trading_day()
+        save_snapshot(_last_df, target_date, overwrite=True)
+        return jsonify({'success': True, 'date': target_date})
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'儲存失敗：{str(e)}'}), 500
+
+
 @app.route('/api/stocks')
 def api_stocks():
+    global _last_df
     try:
         df = run_stock_update()
-        today = datetime.now().strftime('%Y-%m-%d')
-        save_snapshot(df, today)
+        _last_df = df
+        trading_date = last_trading_day()
+        save_snapshot(df, trading_date)
 
         records = df.where(pd.notnull(df), None).to_dict(orient='records')
         return jsonify({
@@ -217,7 +259,7 @@ def api_stocks():
             'data': records,
             'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'count': len(records),
-            'date': today,
+            'date': trading_date,
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -238,6 +280,21 @@ def api_history():
 
 
 init_db()
+
+# Remove snapshots saved on weekends (cleanup for old bad data)
+def purge_weekend_snapshots():
+    con = sqlite3.connect(DB_PATH)
+    dates = [d[0] for d in con.execute('SELECT DISTINCT date FROM snapshots').fetchall()]
+    for d in dates:
+        try:
+            if datetime.strptime(d, '%Y-%m-%d').weekday() >= 5:
+                con.execute('DELETE FROM snapshots WHERE date=?', (d,))
+        except Exception:
+            pass
+    con.commit()
+    con.close()
+
+purge_weekend_snapshots()
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
