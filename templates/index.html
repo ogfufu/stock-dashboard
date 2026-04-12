@@ -566,7 +566,7 @@
             <th data-col="名稱">名稱</th>
             <th data-col="股價">股價</th>
             <th data-col="漲跌幅">漲跌幅%</th>
-            <th data-col="投信">投信金額(萬)</th>
+            <th data-col="投信">投信金額(百萬)</th>
             <th data-col="月(YOY)">月(YOY)%</th>
             <th data-col="月-1(YOY)">月-1(YOY)%</th>
             <th data-col="開盤">開盤</th>
@@ -844,7 +844,7 @@
     kbarTip.innerHTML =
       `<div class="kt-code">${r['代號']} ${r['名稱'] || ''}</div>` +
       `<div class="kt-row"><span class="kt-label">漲跌幅</span><span class="kt-val ${cls}">${sign}${chg.toFixed(2)}%</span></div>` +
-      `<div class="kt-row"><span class="kt-label">投信金額</span><span class="kt-val">${r['投信'] != null && r['股價'] != null ? (r['投信'] > 0 ? '+' : '') + Math.round(r['投信'] * r['股價'] / 10).toLocaleString() + '萬' : '—'}</span></div>` +
+      `<div class="kt-row"><span class="kt-label">投信金額</span><span class="kt-val">${r['投信'] != null && r['股價'] != null ? (r['投信'] > 0 ? '+' : '') + (r['投信'] * r['股價'] / 1000).toFixed(1) + '百萬' : '—'}</span></div>` +
       `<div class="kt-row"><span class="kt-label">月YOY</span><span class="kt-val">${fmt(r['月(YOY)'])}</span></div>` +
       `<div class="kt-row"><span class="kt-label">月-1YOY</span><span class="kt-val">${fmt(r['月-1(YOY)'])}</span></div>` +
       `<div class="kt-row"><span class="kt-label">資金</span><span class="kt-val">${fmtN(r['資金(億)'])}億</span></div>` +
@@ -929,10 +929,10 @@
 
         if (col === '投信' && typeof val === 'number') {
           const price = r['股價'];
-          const amt   = (price != null) ? Math.round(val * price / 10) : null;
+          const amt   = (price != null) ? (val * price / 1000) : null;
           const cls   = val > 0 ? 'pos' : val < 0 ? 'neg' : 'zero';
           const sign  = val > 0 ? '+' : '';
-          const disp  = amt != null ? `${sign}${amt.toLocaleString()}萬` : `${sign}${val}張`;
+          const disp  = amt != null ? `${sign}${amt.toFixed(1)}百萬` : `${sign}${val}張`;
           return `<td class="${cls}">${disp}</td>`;
         }
         if (SIGN_COLS.has(col) && typeof val === 'number') {
