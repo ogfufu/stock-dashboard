@@ -7,6 +7,7 @@ from datetime import datetime, date, timedelta
 
 import pandas as pd
 import requests
+import twstock
 from flask import Flask, jsonify, render_template, request
 
 app = Flask(__name__)
@@ -19,8 +20,7 @@ HEADERS = {
     )
 }
 
-DB_PATH      = os.path.join(os.path.dirname(__file__), 'history.db')
-BACKUP_XLSX  = os.path.join(os.path.dirname(__file__), 'backup.xlsx')
+DB_PATH   = os.path.join(os.path.dirname(__file__), 'history.db')
 KEEP_DAYS = 5
 
 # ---------- SQLite history ----------
@@ -33,6 +33,7 @@ def init_db():
             rank       INTEGER,
             code       TEXT,
             name       TEXT,
+            market     TEXT,
             price      REAL,
             change_pct REAL,
             trust      INTEGER,
@@ -46,7 +47,13 @@ def init_db():
             PRIMARY KEY (date, code)
         )
     ''')
-    # Crown reference: independent of date, stores the "previous day" baseline
+    # Migration: add market column to older snapshots tables
+    try:
+        con.execute('ALTER TABLE snapshots ADD COLUMN market TEXT')
+    except sqlite3.OperationalError:
+        pass  # column already exists
+
+    # Crown reference: independent of date, stores the "previous" baseline
     con.execute('''
         CREATE TABLE IF NOT EXISTS crown_ref (
             code  TEXT PRIMARY KEY,
@@ -54,9 +61,27 @@ def init_db():
             rank  INTEGER
         )
     ''')
-    # Backup metadata: records which date was last manually backed up
+    # Compare snapshot: user-triggered "複製到對照排行榜"
     con.execute('''
-        CREATE TABLE IF NOT EXISTS backup_meta (
+        CREATE TABLE IF NOT EXISTS compare_snapshot (
+            rank       INTEGER,
+            code       TEXT PRIMARY KEY,
+            name       TEXT,
+            market     TEXT,
+            price      REAL,
+            change_pct REAL,
+            trust      INTEGER,
+            yoy        REAL,
+            yoy1       REAL,
+            open       REAL,
+            high       REAL,
+            low        REAL,
+            capital    REAL,
+            industry   TEXT
+        )
+    ''')
+    con.execute('''
+        CREATE TABLE IF NOT EXISTS compare_meta (
             id      INTEGER PRIMARY KEY CHECK (id = 1),
             date    TEXT,
             created TEXT
@@ -84,24 +109,60 @@ def save_crown_ref(df):
 
 
 def get_crown_ref():
-    """Return set of codes saved as crown reference."""
+    """Return list of codes saved as crown reference."""
     con = sqlite3.connect(DB_PATH)
     rows = con.execute('SELECT code FROM crown_ref').fetchall()
     con.close()
     return [r[0] for r in rows]
 
 
-def save_backup_meta(date_str):
+def save_compare_snapshot(df, date_str):
+    """Replace compare snapshot with current df data."""
     con = sqlite3.connect(DB_PATH)
-    con.execute('INSERT OR REPLACE INTO backup_meta VALUES (1, ?, ?)',
+    con.execute('DELETE FROM compare_snapshot')
+    rows = [
+        (
+            int(r['排序']),
+            str(r['代號']),
+            r['名稱'],
+            r.get('市場'),
+            r['股價'],
+            r['漲跌幅'],
+            int(r['投信']) if r['投信'] is not None else None,
+            r['月(YOY)'],
+            r['月-1(YOY)'],
+            r['開盤'],
+            r['最高'],
+            r['最低'],
+            r['資金(億)'],
+            r['產業類型'],
+        )
+        for _, r in df.iterrows()
+    ]
+    con.executemany('INSERT OR REPLACE INTO compare_snapshot VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)', rows)
+    con.execute('INSERT OR REPLACE INTO compare_meta VALUES (1, ?, ?)',
                 (date_str, datetime.now().isoformat()))
     con.commit()
     con.close()
 
 
-def get_backup_meta():
+def get_compare_snapshot():
+    """Return compare snapshot records."""
     con = sqlite3.connect(DB_PATH)
-    row = con.execute('SELECT date FROM backup_meta WHERE id=1').fetchone()
+    rows = con.execute(
+        '''SELECT rank,code,name,market,price,change_pct,trust,yoy,yoy1,
+                  open,high,low,capital,industry
+           FROM compare_snapshot ORDER BY rank'''
+    ).fetchall()
+    con.close()
+    cols = ['排序','代號','名稱','市場','股價','漲跌幅','投信','月(YOY)','月-1(YOY)','開盤','最高','最低','資金(億)','產業類型']
+    return [dict(zip(cols, r)) for r in rows]
+
+
+def get_compare_meta():
+    """Return saved compare date string, or None."""
+    con = sqlite3.connect(DB_PATH)
+    row = con.execute('SELECT date FROM compare_meta WHERE id=1').fetchone()
     con.close()
     return row[0] if row else None
 
@@ -121,26 +182,15 @@ def get_sector_configs():
 
 
 def last_trading_day():
-    """Most recent weekday on or before today (today itself if weekday)."""
+    """Most recent weekday on or before today."""
     d = date.today()
-    while d.weekday() >= 5:   # Sat=5, Sun=6
-        d -= timedelta(days=1)
-    return d.strftime('%Y-%m-%d')
-
-
-def prev_trading_day():
-    """The trading day immediately before last_trading_day()."""
-    d = date.today()
-    while d.weekday() >= 5:
-        d -= timedelta(days=1)
-    d -= timedelta(days=1)
     while d.weekday() >= 5:
         d -= timedelta(days=1)
     return d.strftime('%Y-%m-%d')
 
 
 def save_snapshot(df, date_str, overwrite=False):
-    """Save snapshot for date_str.  If overwrite=False, skip when date exists."""
+    """Save snapshot for date_str. If overwrite=False, skip when date exists."""
     con = sqlite3.connect(DB_PATH)
     exists = con.execute(
         'SELECT 1 FROM snapshots WHERE date=? LIMIT 1', (date_str,)
@@ -157,6 +207,7 @@ def save_snapshot(df, date_str, overwrite=False):
             int(r['排序']),
             str(r['代號']),
             r['名稱'],
+            r.get('市場'),
             r['股價'],
             r['漲跌幅'],
             int(r['投信']) if r['投信'] is not None else None,
@@ -171,7 +222,7 @@ def save_snapshot(df, date_str, overwrite=False):
         for _, r in df.iterrows()
     ]
     con.executemany(
-        'INSERT OR REPLACE INTO snapshots VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        'INSERT OR REPLACE INTO snapshots VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
         rows
     )
 
@@ -203,18 +254,18 @@ def get_history_dates():
 def get_snapshot(date_str):
     con = sqlite3.connect(DB_PATH)
     rows = con.execute(
-        '''SELECT rank,code,name,price,change_pct,trust,yoy,yoy1,
+        '''SELECT rank,code,name,market,price,change_pct,trust,yoy,yoy1,
                   open,high,low,capital,industry
            FROM snapshots WHERE date=? ORDER BY rank''',
         (date_str,)
     ).fetchall()
     con.close()
-    cols = ['排序','代號','名稱','股價','漲跌幅','投信','月(YOY)','月-1(YOY)','開盤','最高','最低','資金(億)','產業類型']
+    cols = ['排序','代號','名稱','市場','股價','漲跌幅','投信','月(YOY)','月-1(YOY)','開盤','最高','最低','資金(億)','產業類型']
     return [dict(zip(cols, r)) for r in rows]
 
 
 # ---------- In-memory cache ----------
-_last_df = None          # last successfully fetched DataFrame (for backup)
+_last_df = None
 _wespai_cache = {'data': None, 'date': None}
 _wespai_lock = threading.Lock()
 
@@ -238,57 +289,163 @@ def get_wespai_data():
         return df
 
 
-def get_histock_data():
+def get_histock_codes():
+    """Get top-100 stock codes + volume (億) from HiStock."""
     url = 'https://histock.tw/stock/rank.aspx?m=13&p=all'
     r = requests.get(url, headers=HEADERS, timeout=20)
     r.raise_for_status()
     df_all = pd.read_html(io.StringIO(r.text))[0]
     df_all.columns = df_all.columns.str.replace('▼', '', regex=False)
-    cols = ['代號', '名稱', '價格', '漲跌', '漲跌幅', '開盤', '最高', '最低', '昨收', '成交值(億)']
-    df = df_all[cols].copy()
+    df = df_all[['代號', '成交值(億)']].copy()
     df['代號'] = df['代號'].astype(str)
-    return df
+    df['成交值(億)'] = pd.to_numeric(df['成交值(億)'], errors='coerce')
+    return df.head(100)
+
+
+def get_stock_market(code):
+    """Return '上市' or '上櫃' using twstock.codes metadata."""
+    try:
+        info = twstock.codes.get(code)
+        if info is None:
+            return '上市'
+        market = getattr(info, 'market', '') or ''
+        m = market.upper()
+        if 'OTC' in m or 'TPEX' in m or '上櫃' in market:
+            return '上櫃'
+        return '上市'
+    except Exception:
+        return '上市'
+
+
+def _parse_num(s):
+    """Parse numeric string from TWSE API; return float or None."""
+    if s in ('-', '--', '', None):
+        return None
+    try:
+        return float(str(s).replace(',', ''))
+    except (ValueError, TypeError):
+        return None
+
+
+def get_twse_realtime(codes_markets):
+    """
+    Batch-fetch real-time price data from TWSE unified API.
+    codes_markets: list of (code, market_str)
+    Returns dict: code -> {name, price, change_pct, open, high, low}
+    """
+    TWSE_HDR = {**HEADERS, 'Referer': 'https://mis.twse.com.tw/stock/fibest.html'}
+    result = {}
+    batch_size = 50
+
+    for i in range(0, len(codes_markets), batch_size):
+        batch = codes_markets[i:i + batch_size]
+        parts = []
+        for code, mkt in batch:
+            prefix = 'otc' if mkt == '上櫃' else 'tse'
+            parts.append(f'{prefix}_{code}.tw')
+        ex_ch = '|'.join(parts)
+        url = (
+            f'https://mis.twse.com.tw/stock/api/getStockInfo.jsp'
+            f'?ex_ch={ex_ch}&json=1&delay=0'
+        )
+        try:
+            resp = requests.get(url, headers=TWSE_HDR, timeout=20)
+            resp.raise_for_status()
+            data = resp.json()
+            for item in data.get('msgArray', []):
+                code = item.get('c', '')
+                if not code:
+                    continue
+                y = _parse_num(item.get('y'))   # yesterday close
+                z = _parse_num(item.get('z'))   # current / last price
+                price = z if z is not None else y
+                chg = 0.0
+                if price is not None and y and y != 0:
+                    chg = round((price - y) / y * 100, 2)
+                result[code] = {
+                    'name':       item.get('n', code),
+                    'price':      price,
+                    'change_pct': chg,
+                    'open':       _parse_num(item.get('o')),
+                    'high':       _parse_num(item.get('h')),
+                    'low':        _parse_num(item.get('l')),
+                }
+        except Exception:
+            pass
+
+    return result
 
 
 def run_stock_update():
-    df_hi = get_histock_data()
+    # 1. Top-100 codes + volume from HiStock
+    df_codes = get_histock_codes()
+    codes = df_codes['代號'].tolist()
+
+    # 2. Market type for each code (上市 / 上櫃)
+    codes_markets = [(c, get_stock_market(c)) for c in codes]
+    market_map = dict(codes_markets)
+
+    # 3. Real-time prices from TWSE
+    price_data = get_twse_realtime(codes_markets)
+
+    # 4. Wespai: 投信 + YOY
     df_wes = get_wespai_data()
+    wes_idx = df_wes.set_index('代號')
 
-    merged = pd.merge(df_hi, df_wes, on='代號', how='inner')
-    processed = merged.rename(columns={
-        '價格': '股價',
-        '投信買賣超': '投信',
-        '(月)營收年增率(%)': '月(YOY)',
-        '(月-1)營收年增率(%)': '月-1(YOY)',
-        '成交值(億)': '資金(億)',
-    })
+    # 5. Merge
+    rows = []
+    for _, row in df_codes.iterrows():
+        code = row['代號']
+        cap  = row['成交值(億)']
+        pi   = price_data.get(code)
+        if pi is None:
+            continue
 
-    processed['漲跌幅'] = pd.to_numeric(
-        processed['漲跌幅'].astype(str)
-            .str.replace('+', '', regex=False)
-            .str.replace('%', '', regex=False)
-            .str.strip(),
-        errors='coerce'
-    ).fillna(0)
+        name     = pi['name']
+        trust    = 0
+        yoy      = None
+        yoy1     = None
+        industry = ''
 
-    processed['投信'] = pd.to_numeric(
-        processed['投信'], errors='coerce'
-    ).fillna(0).round().astype(int)
+        if code in wes_idx.index:
+            w = wes_idx.loc[code]
+            company = str(w.get('公司', '') or '')
+            if company:
+                name = company
+            t = pd.to_numeric(w.get('投信買賣超'), errors='coerce')
+            trust = int(round(t)) if pd.notna(t) else 0
+            yv = pd.to_numeric(w.get('(月)營收年增率(%)'), errors='coerce')
+            yoy = float(yv) if pd.notna(yv) else None
+            yv1 = pd.to_numeric(w.get('(月-1)營收年增率(%)'), errors='coerce')
+            yoy1 = float(yv1) if pd.notna(yv1) else None
+            industry = str(w.get('產業類型', '') or '')
 
-    numeric_cols = ['股價', '開盤', '最高', '最低', '月(YOY)', '月-1(YOY)', '資金(億)']
-    for col in numeric_cols:
-        processed[col] = pd.to_numeric(processed[col], errors='coerce')
+        rows.append({
+            '代號':      code,
+            '名稱':      name,
+            '市場':      market_map.get(code, '上市'),
+            '股價':      pi['price'],
+            '漲跌幅':    pi['change_pct'],
+            '開盤':      pi['open'],
+            '最高':      pi['high'],
+            '最低':      pi['low'],
+            '投信':      trust,
+            '月(YOY)':   yoy,
+            '月-1(YOY)': yoy1,
+            '資金(億)':  cap,
+            '產業類型':  industry,
+        })
 
-    processed = (
-        processed
-        .sort_values('資金(億)', ascending=False)
-        .head(100)
-        .reset_index(drop=True)
-    )
-    processed.insert(0, '排序', range(1, len(processed) + 1))
+    if not rows:
+        raise ValueError('無法取得任何股票資料')
 
-    final_cols = ['排序', '代號', '名稱', '股價', '漲跌幅', '投信', '月(YOY)', '月-1(YOY)', '開盤', '最高', '最低', '資金(億)', '產業類型']
-    return processed[final_cols]
+    df = pd.DataFrame(rows)
+    df = df.sort_values('資金(億)', ascending=False).head(100).reset_index(drop=True)
+    df.insert(0, '排序', range(1, len(df) + 1))
+
+    final_cols = ['排序','代號','名稱','市場','股價','漲跌幅','投信',
+                  '月(YOY)','月-1(YOY)','開盤','最高','最低','資金(億)','產業類型']
+    return df[final_cols]
 
 
 # ---------- Routes ----------
@@ -298,9 +455,9 @@ def index():
     return render_template('index.html')
 
 
-@app.route('/api/backup', methods=['POST'])
-def api_backup():
-    """Save current data to SQLite + Excel, update crown ref and backup metadata."""
+@app.route('/api/compare', methods=['POST'])
+def api_save_compare():
+    """Copy current ranking to 對照排行榜."""
     global _last_df
     if _last_df is None:
         try:
@@ -309,47 +466,30 @@ def api_backup():
             return jsonify({'success': False, 'error': f'資料抓取失敗：{str(e)}'}), 500
     try:
         target_date = last_trading_day()
+        save_compare_snapshot(_last_df, target_date)
         save_crown_ref(_last_df)
-        save_snapshot(_last_df, target_date, overwrite=True)   # persist to SQLite
-        save_backup_meta(target_date)                          # record manual backup date
-        try:                                                   # also write Excel (best-effort)
-            _last_df.to_excel(BACKUP_XLSX, index=False, engine='openpyxl')
-        except Exception:
-            pass
         return jsonify({'success': True, 'date': target_date})
     except Exception as e:
         return jsonify({'success': False, 'error': f'儲存失敗：{str(e)}'}), 500
 
 
-@app.route('/api/backup-status')
-def api_backup_status():
-    """Return whether a manual backup exists (reads from SQLite)."""
-    date_str = get_backup_meta()
-    return jsonify({'exists': date_str is not None, 'date': date_str})
-
-
-@app.route('/api/history-backup')
-def api_history_backup():
-    """Return the manually backed-up ranking (SQLite primary, Excel fallback)."""
-    date_str = get_backup_meta()
+@app.route('/api/compare', methods=['GET'])
+def api_get_compare():
+    """Return 對照排行榜 snapshot."""
+    date_str = get_compare_meta()
     if not date_str:
-        return jsonify({'success': False, 'error': '尚無備份資料'}), 404
-    records = get_snapshot(date_str)
-    if records:
-        return jsonify({'success': True, 'data': records, 'date': date_str})
-    # Fallback: read from Excel if SQLite row was pruned
-    if os.path.exists(BACKUP_XLSX):
-        try:
-            df = pd.read_excel(BACKUP_XLSX, engine='openpyxl')
-            df = df.where(pd.notnull(df), None)
-            if '代號' in df.columns:
-                df['代號'] = df['代號'].astype(str)
-            if '投信' in df.columns:
-                df['投信'] = pd.to_numeric(df['投信'], errors='coerce').fillna(0).round().astype(int)
-            return jsonify({'success': True, 'data': df.to_dict(orient='records'), 'date': date_str})
-        except Exception as e:
-            return jsonify({'success': False, 'error': str(e)}), 500
-    return jsonify({'success': False, 'error': '查無備份資料'}), 404
+        return jsonify({'success': False, 'error': '尚無對照資料'}), 404
+    records = get_compare_snapshot()
+    if not records:
+        return jsonify({'success': False, 'error': '查無對照資料'}), 404
+    return jsonify({'success': True, 'data': records, 'date': date_str})
+
+
+@app.route('/api/compare-status')
+def api_compare_status():
+    """Return whether a compare snapshot exists."""
+    date_str = get_compare_meta()
+    return jsonify({'exists': date_str is not None, 'date': date_str})
 
 
 @app.route('/api/sectors', methods=['GET'])
