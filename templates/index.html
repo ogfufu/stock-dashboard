@@ -568,6 +568,7 @@
             <th data-col="市場">市場</th>
             <th data-col="股價">股價</th>
             <th data-col="漲跌幅">漲跌幅%</th>
+            <th data-col="外資">外資金額(千萬)</th>
             <th data-col="投信">投信金額(千萬)</th>
             <th data-col="月(YOY)">月(YOY)%</th>
             <th data-col="月-1(YOY)">月-1(YOY)%</th>
@@ -577,10 +578,10 @@
           </tr>
         </thead>
         <tbody id="table-body">
-          <tr><td colspan="13" style="text-align:center;padding:40px;color:var(--muted)">載入中…</td></tr>
+          <tr><td colspan="14" style="text-align:center;padding:40px;color:var(--muted)">載入中…</td></tr>
         </tbody>
         <tfoot>
-          <tr><td colspan="13" id="tfoot-count" style="text-align:right">共 0 筆</td></tr>
+          <tr><td colspan="14" id="tfoot-count" style="text-align:right">共 0 筆</td></tr>
         </tfoot>
       </table>
     </div>
@@ -634,7 +635,7 @@
   let countdown = 300;
   let tickerHandle = null;
 
-  const SIGN_COLS = new Set(['漲跌幅', '投信', '月(YOY)', '月-1(YOY)']);
+  const SIGN_COLS = new Set(['漲跌幅', '外資', '投信', '月(YOY)', '月-1(YOY)']);
   const NUM_COLS  = new Set(['股價', '漲跌幅', '開盤', '資金(億)']);
 
   // ── 族群分類 ──
@@ -937,6 +938,7 @@
     kbarTip.innerHTML =
       `<div class="kt-code">${r['代號']} ${r['名稱'] || ''}</div>` +
       `<div class="kt-row"><span class="kt-label">漲跌幅</span><span class="kt-val ${cls}">${sign}${chg.toFixed(2)}%</span></div>` +
+      `<div class="kt-row"><span class="kt-label">外資金額</span><span class="kt-val">${r['外資'] != null && r['股價'] != null ? (r['外資'] > 0 ? '+' : '') + (r['外資'] * r['股價'] / 10000).toFixed(2) : '—'}</span></div>` +
       `<div class="kt-row"><span class="kt-label">投信金額</span><span class="kt-val">${r['投信'] != null && r['股價'] != null ? (r['投信'] > 0 ? '+' : '') + (r['投信'] * r['股價'] / 10000).toFixed(2) : '—'}</span></div>` +
       `<div class="kt-row"><span class="kt-label">月YOY</span><span class="kt-val">${fmt(r['月(YOY)'])}</span></div>` +
       `<div class="kt-row"><span class="kt-label">月-1YOY</span><span class="kt-val">${fmt(r['月-1(YOY)'])}</span></div>` +
@@ -964,11 +966,11 @@
 
     if (sortCol) {
       rows = [...rows].sort((a, b) => {
-        // 投信 sorts by monetary value (張 × 股價), not raw lots
+        // 投信/外資 sort by monetary value (張 × 股價), not raw lots
         let va, vb;
-        if (sortCol === '投信') {
-          va = (a['投信'] != null && a['股價'] != null) ? a['投信'] * a['股價'] : null;
-          vb = (b['投信'] != null && b['股價'] != null) ? b['投信'] * b['股價'] : null;
+        if (sortCol === '投信' || sortCol === '外資') {
+          va = (a[sortCol] != null && a['股價'] != null) ? a[sortCol] * a['股價'] : null;
+          vb = (b[sortCol] != null && b['股價'] != null) ? b[sortCol] * b['股價'] : null;
         } else {
           va = a[sortCol]; vb = b[sortCol];
         }
@@ -987,11 +989,11 @@
     tfootCount.textContent = `共 ${n} 筆`;
 
     if (!n) {
-      tbody.innerHTML = '<tr><td colspan="13" style="text-align:center;padding:40px;color:var(--muted)">無符合資料</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="14" style="text-align:center;padding:40px;color:var(--muted)">無符合資料</td></tr>';
       return;
     }
 
-    const DISPLAY = ['排序','代號','名稱','市場','股價','漲跌幅','投信','月(YOY)','月-1(YOY)','開盤','資金(億)','產業類型'];
+    const DISPLAY = ['排序','代號','名稱','市場','股價','漲跌幅','外資','投信','月(YOY)','月-1(YOY)','開盤','資金(億)','產業類型'];
 
     tbody.innerHTML = rows.map(r => {
       const open  = r['開盤'];
@@ -1024,7 +1026,7 @@
 
         if (val === null || val === undefined) return `<td class="zero">—</td>`;
 
-        if (col === '投信' && typeof val === 'number') {
+        if ((col === '外資' || col === '投信') && typeof val === 'number') {
           const price = r['股價'];
           const amt   = (price != null) ? (val * price / 10000) : null;
           const cls   = val > 0 ? 'pos' : val < 0 ? 'neg' : 'zero';

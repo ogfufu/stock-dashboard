@@ -47,11 +47,17 @@ def init_db():
             PRIMARY KEY (date, code)
         )
     ''')
-    # Migration: add market column to older snapshots tables
-    try:
-        con.execute('ALTER TABLE snapshots ADD COLUMN market TEXT')
-    except sqlite3.OperationalError:
-        pass  # column already exists
+    # Migration: add columns to older snapshots tables
+    for col_def in ('market TEXT', 'foreign_inv INTEGER'):
+        try:
+            con.execute(f'ALTER TABLE snapshots ADD COLUMN {col_def}')
+        except sqlite3.OperationalError:
+            pass
+    for col_def in ('foreign_inv INTEGER',):
+        try:
+            con.execute(f'ALTER TABLE compare_snapshot ADD COLUMN {col_def}')
+        except sqlite3.OperationalError:
+            pass
 
     # Crown reference: independent of date, stores the "previous" baseline
     con.execute('''
@@ -128,7 +134,8 @@ def save_compare_snapshot(df, date_str):
             r.get('市場'),
             r['股價'],
             r['漲跌幅'],
-            int(r['投信']) if r['投信'] is not None else None,
+            int(r['投信'])     if r.get('投信')     is not None else None,
+            int(r['外資'])     if r.get('外資')     is not None else None,
             r['月(YOY)'],
             r['月-1(YOY)'],
             r['開盤'],
@@ -139,7 +146,13 @@ def save_compare_snapshot(df, date_str):
         )
         for _, r in df.iterrows()
     ]
-    con.executemany('INSERT OR REPLACE INTO compare_snapshot VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)', rows)
+    con.executemany(
+        '''INSERT OR REPLACE INTO compare_snapshot
+           (rank,code,name,market,price,change_pct,trust,foreign_inv,
+            yoy,yoy1,open,high,low,capital,industry)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+        rows
+    )
     con.execute('INSERT OR REPLACE INTO compare_meta VALUES (1, ?, ?)',
                 (date_str, datetime.now().isoformat()))
     con.commit()
@@ -150,12 +163,12 @@ def get_compare_snapshot():
     """Return compare snapshot records."""
     con = sqlite3.connect(DB_PATH)
     rows = con.execute(
-        '''SELECT rank,code,name,market,price,change_pct,trust,yoy,yoy1,
+        '''SELECT rank,code,name,market,price,change_pct,trust,foreign_inv,yoy,yoy1,
                   open,high,low,capital,industry
            FROM compare_snapshot ORDER BY rank'''
     ).fetchall()
     con.close()
-    cols = ['排序','代號','名稱','市場','股價','漲跌幅','投信','月(YOY)','月-1(YOY)','開盤','最高','最低','資金(億)','產業類型']
+    cols = ['排序','代號','名稱','市場','股價','漲跌幅','投信','外資','月(YOY)','月-1(YOY)','開盤','最高','最低','資金(億)','產業類型']
     return [dict(zip(cols, r)) for r in rows]
 
 
@@ -210,7 +223,8 @@ def save_snapshot(df, date_str, overwrite=False):
             r.get('市場'),
             r['股價'],
             r['漲跌幅'],
-            int(r['投信']) if r['投信'] is not None else None,
+            int(r['投信']) if r.get('投信') is not None else None,
+            int(r['外資']) if r.get('外資') is not None else None,
             r['月(YOY)'],
             r['月-1(YOY)'],
             r['開盤'],
@@ -222,7 +236,10 @@ def save_snapshot(df, date_str, overwrite=False):
         for _, r in df.iterrows()
     ]
     con.executemany(
-        'INSERT OR REPLACE INTO snapshots VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        '''INSERT OR REPLACE INTO snapshots
+           (date,rank,code,name,market,price,change_pct,trust,foreign_inv,
+            yoy,yoy1,open,high,low,capital,industry)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
         rows
     )
 
@@ -254,13 +271,13 @@ def get_history_dates():
 def get_snapshot(date_str):
     con = sqlite3.connect(DB_PATH)
     rows = con.execute(
-        '''SELECT rank,code,name,market,price,change_pct,trust,yoy,yoy1,
+        '''SELECT rank,code,name,market,price,change_pct,trust,foreign_inv,yoy,yoy1,
                   open,high,low,capital,industry
            FROM snapshots WHERE date=? ORDER BY rank''',
         (date_str,)
     ).fetchall()
     con.close()
-    cols = ['排序','代號','名稱','市場','股價','漲跌幅','投信','月(YOY)','月-1(YOY)','開盤','最高','最低','資金(億)','產業類型']
+    cols = ['排序','代號','名稱','市場','股價','漲跌幅','投信','外資','月(YOY)','月-1(YOY)','開盤','最高','最低','資金(億)','產業類型']
     return [dict(zip(cols, r)) for r in rows]
 
 
@@ -276,12 +293,17 @@ def get_wespai_data():
         if _wespai_cache['data'] is not None and _wespai_cache['date'] == today:
             return _wespai_cache['data']
 
-        url = 'https://stock.wespai.com/p/71294'
+        url = 'https://stock.wespai.com/p/75789'
         r = requests.get(url, headers=HEADERS, timeout=20)
         r.raise_for_status()
         df_all = pd.read_html(io.StringIO(r.text))[0]
-        cols = ['代號', '公司', '投信買賣超', '(月)營收年增率(%)', '(月-1)營收年增率(%)', '產業類型']
-        df = df_all[cols].copy()
+        # Flatten multi-level columns if present
+        if isinstance(df_all.columns, pd.MultiIndex):
+            df_all.columns = [' '.join(str(c) for c in col).strip() for col in df_all.columns]
+        want = ['代號', '公司', '外資買賣超', '投信買賣超',
+                '(月)營收年增率(%)', '(月-1)營收年增率(%)', '產業類型']
+        available = [c for c in want if c in df_all.columns]
+        df = df_all[available].copy()
         df['代號'] = df['代號'].astype(str)
 
         _wespai_cache['data'] = df
@@ -405,17 +427,23 @@ def run_stock_update():
 
         name     = pi['name']
         trust    = 0
+        foreign  = 0
         yoy      = None
         yoy1     = None
         industry = ''
 
         if code in wes_idx.index:
             w = wes_idx.loc[code]
+            # If duplicate codes in wespai, take first row
+            if isinstance(w, pd.DataFrame):
+                w = w.iloc[0]
             company = str(w.get('公司', '') or '')
             if company:
                 name = company
             t = pd.to_numeric(w.get('投信買賣超'), errors='coerce')
             trust = int(round(t)) if pd.notna(t) else 0
+            f = pd.to_numeric(w.get('外資買賣超'), errors='coerce')
+            foreign = int(round(f)) if pd.notna(f) else 0
             yv = pd.to_numeric(w.get('(月)營收年增率(%)'), errors='coerce')
             yoy = float(yv) if pd.notna(yv) else None
             yv1 = pd.to_numeric(w.get('(月-1)營收年增率(%)'), errors='coerce')
@@ -432,6 +460,7 @@ def run_stock_update():
             '最高':      pi['high'],
             '最低':      pi['low'],
             '投信':      trust,
+            '外資':      foreign,
             '月(YOY)':   yoy,
             '月-1(YOY)': yoy1,
             '資金(億)':  cap,
@@ -445,7 +474,7 @@ def run_stock_update():
     df = df.sort_values('資金(億)', ascending=False).head(100).reset_index(drop=True)
     df.insert(0, '排序', range(1, len(df) + 1))
 
-    final_cols = ['排序','代號','名稱','市場','股價','漲跌幅','投信',
+    final_cols = ['排序','代號','名稱','市場','股價','漲跌幅','外資','投信',
                   '月(YOY)','月-1(YOY)','開盤','最高','最低','資金(億)','產業類型']
     return df[final_cols]
 
